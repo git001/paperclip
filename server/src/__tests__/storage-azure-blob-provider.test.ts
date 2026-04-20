@@ -2,10 +2,11 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { Readable } from "node:stream";
 import { createAzureBlobStorageProvider } from "../storage/azure-blob-provider.js";
 
+// Hoisted so the store is accessible in both the mock factory and beforeEach
+const store = vi.hoisted(() => new Map<string, { body: Buffer; contentType: string }>());
+
 // Mock @azure/storage-blob so tests run without real Azure credentials
 vi.mock("@azure/storage-blob", () => {
-  const store = new Map<string, { body: Buffer; contentType: string }>();
-
   const makeBlockBlobClient = (key: string) => ({
     upload: vi.fn(async (body: Buffer, _length: number, opts?: { blobHTTPHeaders?: { blobContentType?: string } }) => {
       store.set(key, { body, contentType: opts?.blobHTTPHeaders?.blobContentType ?? "application/octet-stream" });
@@ -53,10 +54,13 @@ vi.mock("@azure/storage-blob", () => {
     getContainerClient: vi.fn(() => containerClient),
   };
 
+  // Support both BlobServiceClient.fromConnectionString(...) and new BlobServiceClient(url, credential)
+  const BlobServiceClientMock = vi.fn(() => serviceClient);
+  (BlobServiceClientMock as unknown as { fromConnectionString: ReturnType<typeof vi.fn> }).fromConnectionString =
+    vi.fn(() => serviceClient);
+
   return {
-    BlobServiceClient: {
-      fromConnectionString: vi.fn(() => serviceClient),
-    },
+    BlobServiceClient: BlobServiceClientMock,
     StorageSharedKeyCredential: vi.fn(),
   };
 });
@@ -72,6 +76,7 @@ async function readStreamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer
 describe("azure blob storage provider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    store.clear();
   });
 
   it("throws when no credentials are provided", () => {
@@ -190,5 +195,32 @@ describe("azure blob storage provider", () => {
     const mockService = (BlobServiceClient.fromConnectionString as any).mock.results[0].value;
     const containerClient = mockService.getContainerClient.mock.results[0].value;
     expect(containerClient.getBlockBlobClient).toHaveBeenCalledWith("myprefix/file.txt");
+  });
+
+  it("creates provider using accountName and accountKey auth", async () => {
+    const { BlobServiceClient, StorageSharedKeyCredential } = await import("@azure/storage-blob");
+    const provider = createAzureBlobStorageProvider({
+      accountName: "myaccount",
+      accountKey: "bXlhY2NvdW50a2V5",
+      containerName: "paperclip",
+    });
+
+    const content = Buffer.from("key auth bytes", "utf8");
+    await provider.putObject({
+      objectKey: "key-auth/file.txt",
+      body: content,
+      contentType: "text/plain",
+      contentLength: content.length,
+    });
+
+    expect(StorageSharedKeyCredential).toHaveBeenCalledWith("myaccount", "bXlhY2NvdW50a2V5");
+    expect(BlobServiceClient).toHaveBeenCalledWith(
+      "https://myaccount.blob.core.windows.net",
+      expect.any(Object),
+    );
+
+    const result = await provider.getObject({ objectKey: "key-auth/file.txt" });
+    const fetched = await readStreamToBuffer(result.stream);
+    expect(fetched.toString("utf8")).toBe("key auth bytes");
   });
 });

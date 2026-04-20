@@ -24,6 +24,16 @@ docker build -t paperclip-local \
   --build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g) .
 ```
 
+### Building with buildah
+
+When using `buildah bud`, pass `--ulimit nofile=65536:65536`. Vite opens many files in parallel during the UI build and will fail with `EMFILE: too many open files` without it:
+
+```sh
+buildah bud --tag paperclip:local --rm \
+  --ulimit nofile=65536:65536 \
+  --build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g) .
+```
+
 ## One-liner (build + run)
 
 ```sh

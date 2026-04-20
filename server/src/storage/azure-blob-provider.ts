@@ -62,22 +62,23 @@ export function createAzureBlobStorageProvider(config: AzureBlobProviderConfig):
 
     async getObject(input): Promise<GetObjectResult> {
       const blobClient = getBlockBlobClient(input.objectKey);
+      let response;
       try {
-        const response = await blobClient.download();
-        if (!response.readableStreamBody) throw notFound("Object not found");
-
-        return {
-          stream: response.readableStreamBody as Readable,
-          contentType: response.contentType,
-          contentLength: response.contentLength,
-          etag: response.etag,
-          lastModified: response.lastModified,
-        };
+        response = await blobClient.download();
       } catch (err) {
         const status = (err as { statusCode?: number }).statusCode;
         if (status === 404) throw notFound("Object not found");
         throw err;
       }
+      if (!response.readableStreamBody) throw notFound("Object not found");
+
+      return {
+        stream: response.readableStreamBody as Readable,
+        contentType: response.contentType,
+        contentLength: response.contentLength,
+        etag: response.etag,
+        lastModified: response.lastModified,
+      };
     },
 
     async headObject(input): Promise<HeadObjectResult> {

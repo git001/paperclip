@@ -1,0 +1,8 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: paperclip
+spec:
+  lookupPolicy:
+    # Allows Deployment references to the internal registry path without a full URL
+    local: true

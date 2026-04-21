@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: paperclip-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Persists: PostgreSQL backups (if enabled), secrets keyfile,
+      # agent workspaces, config.json (written at startup via init container)
+      storage: 10Gi

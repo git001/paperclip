@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: paperclip-config
+data:
+  HOST: "0.0.0.0"
+  PORT: "3100"
+  NODE_ENV: "production"
+  SERVE_UI: "true"
+  PAPERCLIP_HOME: "/paperclip"
+  PAPERCLIP_INSTANCE_ID: "default"
+  PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+  PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+  # Storage: Multicloud Object Gateway (NooBaa) provides an S3-compatible API within the cluster
+  PAPERCLIP_STORAGE_PROVIDER: "s3"
+  PAPERCLIP_STORAGE_S3_FORCE_PATH_STYLE: "true"
+  PAPERCLIP_STORAGE_S3_REGION: "us-east-1"
+  # Plugin directory — writable sub-path of the PersistentVolume
+  PAPERCLIP_PLUGIN_DIR: "/paperclip/plugins"
+  # Public URL for auth callbacks — set per overlay to the route hostname
+  PAPERCLIP_PUBLIC_URL: "https://<ROUTE_HOSTNAME>"

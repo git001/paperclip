@@ -1,0 +1,29 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: paperclip
+spec:
+  source:
+    type: Git
+    git:
+      # Git repo URL and branch — overridden per overlay
+      # TODO: switch back to main once fix(docker) and feat(azure-blob) PRs are merged
+      uri: "https://github.com/<ORG>/<REPO>.git"
+      ref: deploy
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      # Note: The Vite build opens many files in parallel (lucide-react icons).
+      # If the build fails with "EMFILE: too many open files", the
+      # nofile limit must be increased via BuildDefaults in the cluster:
+      #   oc edit build.config.openshift.io/cluster
+      # → set spec.buildDefaults.resources with nofile: "65536".
+      # On most ARO clusters the default is already high enough.
+  output:
+    to:
+      kind: ImageStreamTag
+      name: "paperclip:latest"
+  triggers:
+    - type: ConfigChange
+    - type: ImageChange

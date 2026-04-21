@@ -618,6 +618,7 @@ export async function startServer(): Promise<StartedServer> {
     resolveSession,
     pluginWorkerManager,
     localPluginDir: process.env.PAPERCLIP_PLUGIN_DIR,
+    localPluginDir: process.env.PAPERCLIP_PLUGIN_DIR || undefined,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 

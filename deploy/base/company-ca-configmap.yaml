@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: company-ca
+data:
+  # Replace the placeholder below with the actual PEM-encoded CA certificate.
+  # This file must be committed to the private deployment repo — do NOT commit
+  # it to the public paperclip repository.
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    # REPLACE WITH YOUR COMPANY CA CERTIFICATE
+    -----END CERTIFICATE-----

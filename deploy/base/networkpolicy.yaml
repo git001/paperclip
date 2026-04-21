@@ -1,0 +1,37 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: paperclip
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: paperclip
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from the OpenShift router (Route → Service → Pod)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+      ports:
+        - port: 3100
+          protocol: TCP
+  egress:
+    # Allow DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow all HTTPS — covers Azure PostgreSQL (5432 via TLS), Azure Cache for
+    # Redis (6380), Azure Key Vault (443), MCG/NooBaa S3, npm registry, Azure
+    # Blob Storage. Tighten per overlay if egress firewall rules are required.
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 6380
+          protocol: TCP

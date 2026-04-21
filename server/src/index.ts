@@ -617,6 +617,7 @@ export async function startServer(): Promise<StartedServer> {
     betterAuthHandler,
     resolveSession,
     pluginWorkerManager,
+    localPluginDir: process.env.PAPERCLIP_PLUGIN_DIR,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 

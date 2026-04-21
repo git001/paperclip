@@ -613,7 +613,7 @@ export async function startServer(): Promise<StartedServer> {
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
     resolveSession,
-    localPluginDir: process.env.PAPERCLIP_PLUGIN_DIR,
+    localPluginDir: process.env.PAPERCLIP_PLUGIN_DIR || undefined,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 

@@ -24,11 +24,23 @@ deploy/
 
 ## Prerequisites
 
+### OpenShift / ARO
+
 | Component | Purpose |
 |-----------|---------|
 | ARO 4.11+ | tested version |
 | OpenShift Data Foundation (ODF) | provides MCG/NooBaa S3 storage |
 | External Secrets Operator (ESO) | syncs Azure Key Vault secrets into K8s |
+
+### Azure
+
+| Component | Purpose |
+|-----------|---------|
+| Azure Key Vault (one per environment) | stores secrets (DB URL, Redis URL, Better-Auth secret) |
+| Azure PostgreSQL Flexible Server | primary database |
+| Azure Cache for Redis (Standard C1+) | session store for Better-Auth |
+| Service Principal with Key Vault Secrets User role | ESO authenticates against Key Vault |
+| ARO egress IP whitelisted on PostgreSQL firewall | allows DB connections from the cluster |
 
 ## Placeholders to fill in
 

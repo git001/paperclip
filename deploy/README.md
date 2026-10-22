@@ -204,15 +204,21 @@ pods simultaneously causes the following problems:
 **What is safe for multi-instance:** sessions are stored in PostgreSQL
 (Better-Auth + Drizzle), so there is no in-memory session state.
 
-### Rolling updates
+### Update strategy: Recreate
 
-During a rolling deployment, two pods briefly overlap (old + new). This is
-acceptable because:
-- The overlap lasts only seconds
-- Scheduler race conditions during that window are unlikely to cause data loss
-- Migration conflicts are avoided by ensuring the new pod's init container
-  finishes before the old pod terminates (default rolling update behavior with
-  `maxSurge: 1`, `maxUnavailable: 0`)
+The Deployment uses `strategy.type: Recreate` instead of the default
+`RollingUpdate`. With `replicas: 1`, the default rounds to `maxSurge: 1`,
+`maxUnavailable: 0`, so the new pod starts before the old one stops:
+
+- Old and new pod run at the same time. Both run the startup migrations and the
+  in-process schedulers from the table above. The `config-init` init container
+  only writes `config.json`; it does not run or serialize migrations.
+- The PVC is `ReadWriteOnce`. If the new pod is scheduled on a different node,
+  it cannot attach the volume while the old pod holds it, and the rollout hangs
+  with a Multi-Attach error.
+
+`Recreate` stops the old pod first. The cost is a short interruption on every
+rollout, until the new pod passes its readiness probe.
 
 If zero-downtime deployments become a hard requirement in the future, the
 prerequisite work is: distributed job locking (Postgres advisory locks or

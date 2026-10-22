@@ -10,7 +10,12 @@ metadata:
         {"from":{"kind":"ImageStreamTag","name":"paperclip:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"paperclip\")].image","paused":false}
       ]
 spec:
+  # Single-instance application, see README "Replicas and Horizontal Scaling".
   replicas: 1
+  # Recreate: never run old and new pod at the same time (startup migrations,
+  # in-process schedulers) and avoid Multi-Attach errors on the RWO volume.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: paperclip

@@ -30,15 +30,14 @@ deploy/
 |-----------|---------|
 | ARO 4.11+ | tested version |
 | OpenShift Data Foundation (ODF) | provides MCG/NooBaa S3 storage |
-| External Secrets Operator (ESO) | syncs Azure Key Vault secrets into K8s |
+| External Secrets Operator (ESO) v0.16+ | syncs Azure Key Vault secrets into K8s (manifests use `external-secrets.io/v1`) |
 
 ### Azure
 
 | Component | Purpose |
 |-----------|---------|
-| Azure Key Vault (one per environment) | stores secrets (DB URL, Redis URL, Better-Auth secret) |
-| Azure PostgreSQL Flexible Server | primary database |
-| Azure Cache for Redis (Standard C1+) | session store for Better-Auth |
+| Azure Key Vault (one per environment) | stores secrets (DB URL, Better-Auth secret) |
+| Azure PostgreSQL Flexible Server | primary database, also holds the Better-Auth sessions |
 | Service Principal with Key Vault Secrets User role | ESO authenticates against Key Vault |
 | ARO egress IP whitelisted on PostgreSQL firewall | allows DB connections from the cluster |
 
@@ -134,12 +133,10 @@ The following secrets must exist in each Key Vault before deploying:
 |-------------|---------|
 | `paperclip-better-auth-secret` | random hex string (e.g. `openssl rand -hex 32`) |
 | `paperclip-database-url` | full Azure PostgreSQL connection string |
-| `paperclip-redis-url` | Azure Redis connection string |
 
 ```sh
 az keyvault secret set --vault-name <KV_NAME> --name paperclip-better-auth-secret --value "$(openssl rand -hex 32)"
 az keyvault secret set --vault-name <KV_NAME> --name paperclip-database-url      --value "postgresql://..."
-az keyvault secret set --vault-name <KV_NAME> --name paperclip-redis-url         --value "rediss://..."
 ```
 
 ---

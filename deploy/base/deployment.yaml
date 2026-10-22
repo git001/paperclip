@@ -63,13 +63,6 @@ spec:
                 secretKeyRef:
                   name: paperclip-secrets
                   key: BETTER_AUTH_SECRET
-            # REDIS_URL: optional — if Better Auth uses Redis as a session store
-            - name: REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: paperclip-secrets
-                  key: REDIS_URL
-                  optional: true
 
             # --- MCG/NooBaa S3 — values come from the OBC-created ConfigMap/Secret ---
             - name: PAPERCLIP_STORAGE_S3_BUCKET

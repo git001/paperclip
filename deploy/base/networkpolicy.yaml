@@ -25,13 +25,11 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # Allow all HTTPS — covers Azure PostgreSQL (5432 via TLS), Azure Cache for
-    # Redis (6380), Azure Key Vault (443), MCG/NooBaa S3, npm registry, Azure
-    # Blob Storage. Tighten per overlay if egress firewall rules are required.
+    # Allow HTTPS (Azure Key Vault, MCG/NooBaa S3, npm registry, AI APIs,
+    # Azure Blob Storage) and Azure PostgreSQL (5432, TLS). Tighten per overlay
+    # if egress firewall rules are required.
     - ports:
         - port: 443
           protocol: TCP
         - port: 5432
-          protocol: TCP
-        - port: 6380
           protocol: TCP

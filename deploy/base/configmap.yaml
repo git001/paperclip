@@ -19,3 +19,9 @@ data:
   PAPERCLIP_PLUGIN_DIR: "/paperclip/plugins"
   # Public URL for auth callbacks — set per overlay to the route hostname
   PAPERCLIP_PUBLIC_URL: "https://<ROUTE_HOSTNAME>"
+  # Corporate proxy: Node.js fetch ignores HTTP(S)_PROXY unless
+  # NODE_USE_ENV_PROXY=1 (Node.js 24+). Uncomment and fill in per overlay.
+  # NODE_USE_ENV_PROXY: "1"
+  # HTTPS_PROXY: "http://<PROXY_HOST>:<PROXY_PORT>"
+  # HTTP_PROXY: "http://<PROXY_HOST>:<PROXY_PORT>"
+  # NO_PROXY: ".svc,.cluster.local,<CLUSTER_INTERNAL_RANGES>"

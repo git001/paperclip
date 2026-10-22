@@ -19,17 +19,28 @@ spec:
         - port: 3100
           protocol: TCP
   egress:
-    # Allow DNS resolution
+    # NetworkPolicy matches the destination POD port, not the Service port.
+    # Allow DNS resolution: the dns-default Service listens on 53, the
+    # OpenShift DNS pods on 5353.
     - ports:
         - port: 53
           protocol: UDP
         - port: 53
           protocol: TCP
-    # Allow HTTPS (Azure Key Vault, MCG/NooBaa S3, npm registry, AI APIs,
-    # Azure Blob Storage) and Azure PostgreSQL (5432, TLS). Tighten per overlay
-    # if egress firewall rules are required.
+        - port: 5353
+          protocol: UDP
+        - port: 5353
+          protocol: TCP
+    # Port-restricted only, destinations are not limited. Add to: rules or an
+    # egress firewall per overlay if destination filtering is required.
+    # - 443:  Azure Key Vault and other external HTTPS (without proxy)
+    # - 6443: MCG/NooBaa S3 pods (the s3 Service maps 443 -> 6443)
+    # - 5432: Azure PostgreSQL (TLS)
+    # With a corporate proxy, also allow the proxy port (often 3128 or 8080).
     - ports:
         - port: 443
+          protocol: TCP
+        - port: 6443
           protocol: TCP
         - port: 5432
           protocol: TCP

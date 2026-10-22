@@ -33,7 +33,7 @@ spec:
           protocol: TCP
     # Port-restricted only, destinations are not limited. Add to: rules or an
     # egress firewall per overlay if destination filtering is required.
-    # - 443:  Azure Key Vault and other external HTTPS (without proxy)
+    # - 443:  external HTTPS without proxy (AI APIs, npm); Key Vault is queried by the ESO controller, not this pod
     # - 6443: MCG/NooBaa S3 pods (the s3 Service maps 443 -> 6443)
     # - 5432: Azure PostgreSQL (TLS)
     # With a corporate proxy, also allow the proxy port (often 3128 or 8080).

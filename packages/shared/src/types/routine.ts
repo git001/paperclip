@@ -1,6 +1,8 @@
 import type {
   IssueOriginKind,
   IssuePriority,
+  RoutineActivityGatePolicy,
+  RoutineActivityGateScope,
   RoutineCatchUpPolicy,
   RoutineConcurrencyPolicy,
   RoutineStatus,
@@ -8,6 +10,26 @@ import type {
   RoutineTriggerSigningMode,
   RoutineVariableType,
 } from "../constants.js";
+import type { EnvBinding } from "./secrets.js";
+import type { ExecutionWorkspaceMode, IssueExecutionWorkspaceSettings } from "./workspace-runtime.js";
+
+export interface RoutineDescriptionDocument {
+  id: string;
+  companyId: string;
+  routineId: string;
+  key: "description";
+  title: string | null;
+  format: "markdown";
+  body: string;
+  latestRevisionId: string | null;
+  latestRevisionNumber: number;
+  createdByAgentId: string | null;
+  createdByUserId: string | null;
+  updatedByAgentId: string | null;
+  updatedByUserId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 export interface RoutineProjectSummary {
   id: string;
@@ -45,10 +67,13 @@ export interface RoutineVariable {
   options: string[];
 }
 
+export type RoutineEnvConfig = Record<string, EnvBinding>;
+
 export interface Routine {
   id: string;
   companyId: string;
   projectId: string | null;
+  folderId?: string | null;
   goalId: string | null;
   parentIssueId: string | null;
   title: string;
@@ -58,11 +83,17 @@ export interface Routine {
   status: string;
   concurrencyPolicy: string;
   catchUpPolicy: string;
+  activityGatePolicy: string;
+  activityGateScope: string;
+  originKind?: string;
+  originId?: string | null;
   variables: RoutineVariable[];
+  env?: RoutineEnvConfig | null;
   latestRevisionId: string | null;
   latestRevisionNumber: number;
   createdByAgentId: string | null;
   createdByUserId: string | null;
+  responsibleUserId: string | null;
   updatedByAgentId: string | null;
   updatedByUserId: string | null;
   lastTriggeredAt: Date | null;
@@ -97,10 +128,17 @@ export interface RoutineRevisionSnapshotRoutineV1 {
   status: RoutineStatus;
   concurrencyPolicy: RoutineConcurrencyPolicy;
   catchUpPolicy: RoutineCatchUpPolicy;
+  activityGatePolicy: RoutineActivityGatePolicy;
+  activityGateScope: RoutineActivityGateScope;
+  originKind?: string;
+  originId?: string | null;
   variables: RoutineVariable[];
+  env: RoutineEnvConfig | null;
+  responsibleUserId: string | null;
 }
 
 export interface RoutineRevisionSnapshotTriggerV1 {
+  setupPending?: boolean;
   id: string;
   kind: RoutineTriggerKind;
   label: string | null;
@@ -136,6 +174,12 @@ export interface RoutineRevision {
   createdAt: Date;
 }
 
+export interface RoutineWebhookDelivery {
+  status: "received" | "rejected";
+  receivedAt: string;
+  test: boolean;
+}
+
 export interface RoutineTrigger {
   id: string;
   companyId: string;
@@ -148,6 +192,10 @@ export interface RoutineTrigger {
   nextRunAt: Date | null;
   lastFiredAt: Date | null;
   publicId: string | null;
+  webhookUrl?: string | null;
+  setupPending?: boolean;
+  archived?: boolean;
+  lastWebhookDelivery?: RoutineWebhookDelivery | null;
   secretId: string | null;
   signingMode: string | null;
   replayWindowSec: number | null;
@@ -169,6 +217,7 @@ export interface RoutineRun {
   source: string;
   status: string;
   triggeredAt: Date;
+  routineRevisionId?: string | null;
   idempotencyKey: string | null;
   triggerPayload: Record<string, unknown> | null;
   dispatchFingerprint: string | null;
@@ -189,6 +238,7 @@ export interface RoutineDetail extends Routine {
   project: RoutineProjectSummary | null;
   assignee: RoutineAgentSummary | null;
   parentIssue: RoutineIssueSummary | null;
+  descriptionDocument?: RoutineDescriptionDocument | null;
   triggers: RoutineTrigger[];
   recentRuns: RoutineRunSummary[];
   activeIssue: RoutineIssueSummary | null;
@@ -203,6 +253,14 @@ export interface RoutineExecutionIssueOrigin {
   kind: Extract<IssueOriginKind, "routine_execution">;
   routineId: string;
   runId: string | null;
+}
+
+export interface RoutineRunWorkspaceContext {
+  projectId?: string | null;
+  projectWorkspaceId?: string | null;
+  executionWorkspaceId?: string | null;
+  executionWorkspacePreference?: ExecutionWorkspaceMode | null;
+  executionWorkspaceSettings?: IssueExecutionWorkspaceSettings | null;
 }
 
 export interface RoutineListItem extends Routine {

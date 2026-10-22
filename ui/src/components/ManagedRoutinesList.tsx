@@ -6,11 +6,7 @@ import {
   type RoutineListRowItem,
 } from "@/components/RoutineList";
 
-export type ManagedRoutinesListAgent = {
-  id: string;
-  name: string;
-  icon?: string | null;
-};
+export type ManagedRoutinesListAgent = RoutineListAgentSummary & { id: string };
 
 export type ManagedRoutinesListProject = {
   id: string;
@@ -21,6 +17,12 @@ export type ManagedRoutinesListProject = {
 export type ManagedRoutineMissingRef = {
   resourceKind: string;
   resourceKey: string;
+};
+
+export type ManagedRoutineDefaultDrift = {
+  changedFields: string[];
+  defaultTitle?: string | null;
+  defaultDescription?: string | null;
 };
 
 export type ManagedRoutinesListItem = {
@@ -37,6 +39,7 @@ export type ManagedRoutinesListItem = {
   lastRunStatus?: string | null;
   managedByPluginDisplayName?: string | null;
   missingRefs?: ManagedRoutineMissingRef[];
+  defaultDrift?: ManagedRoutineDefaultDrift | null;
 };
 
 export type ManagedRoutinesListProps = {
@@ -87,7 +90,7 @@ export function ManagedRoutinesList({
   onReset,
 }: ManagedRoutinesListProps) {
   const agentById = new Map<string, RoutineListAgentSummary>(
-    agents.map((agent) => [agent.id, { name: agent.name, icon: agent.icon }]),
+    agents.map((agent) => [agent.id, agent]),
   );
   const projectById = new Map<string, RoutineListProjectSummary>(
     projects.map((project) => [project.id, { name: project.name, color: project.color }]),

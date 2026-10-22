@@ -6,6 +6,7 @@ import {
   PLUGIN_UI_SLOT_TYPES,
   PLUGIN_UI_SLOT_ENTITY_TYPES,
   PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS,
+  PLUGIN_RESERVED_COMPANY_SETTINGS_ROUTE_SEGMENTS,
   PLUGIN_LAUNCHER_PLACEMENT_ZONES,
   PLUGIN_LAUNCHER_ACTIONS,
   PLUGIN_LAUNCHER_BOUNDS,
@@ -17,6 +18,8 @@ import {
   PLUGIN_API_ROUTE_METHODS,
   ISSUE_PRIORITIES,
   ROUTINE_CATCH_UP_POLICIES,
+  ROUTINE_ACTIVITY_GATE_POLICIES,
+  ROUTINE_ACTIVITY_GATE_SCOPES,
   ROUTINE_CONCURRENCY_POLICIES,
   ROUTINE_STATUSES,
   ROUTINE_TRIGGER_KINDS,
@@ -24,6 +27,7 @@ import {
   ISSUE_SURFACE_VISIBILITIES,
 } from "../constants.js";
 import { routineVariableSchema } from "./routine.js";
+import { externalObjectProviderKeySchema, externalObjectTypeSchema } from "./external-object.js";
 
 // ---------------------------------------------------------------------------
 // JSON Schema placeholder – a permissive validator for JSON Schema objects
@@ -39,7 +43,7 @@ import { routineVariableSchema } from "./routine.js";
  *
  * @see PLUGIN_SPEC.md §10.1 — Manifest shape
  */
-export const jsonSchemaSchema = z.record(z.unknown()).refine(
+export const jsonSchemaSchema = z.record(z.string(), z.unknown()).refine(
   (val) => {
     // Must have a "type" field if non-empty, or be a valid JSON Schema object
     if (Object.keys(val).length === 0) return true;
@@ -115,7 +119,65 @@ export const pluginToolDeclarationSchema = z.object({
   parametersSchema: jsonSchemaSchema,
 });
 
+const pluginEnvironmentTemplateConfigFieldSchema = z.string()
+  .min(1)
+  .max(100)
+  .regex(
+    /^[A-Za-z_][A-Za-z0-9_-]*$/,
+    "Template config binding fields must be top-level config keys using letters, digits, underscores, or hyphens",
+  )
+  .refine((value) => value !== "provider", {
+    message: "Template config binding must not replace the sandbox provider key",
+  });
+
+export const pluginEnvironmentTemplateConfigBindingSchema = z.object({
+  field: pluginEnvironmentTemplateConfigFieldSchema,
+  unsetFields: z.array(pluginEnvironmentTemplateConfigFieldSchema).max(20).optional(),
+}).strict().superRefine((value, ctx) => {
+  const unsetFields = value.unsetFields ?? [];
+  const seen = new Set<string>();
+  for (const [index, field] of unsetFields.entries()) {
+    if (field === value.field) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Template config binding cannot unset the same field it sets",
+        path: ["unsetFields", index],
+      });
+    }
+    if (seen.has(field)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Template config binding unsetFields must be unique",
+        path: ["unsetFields", index],
+      });
+    }
+    seen.add(field);
+  }
+});
+
+// The nested sandbox capability declaration is `.strict()` so an unknown
+// capability key is a validation error, not a silently dropped field. The outer
+// driver schema below is also `.strict()`, so a typo in a top-level capability
+// name cannot pass either.
+export const sandboxProviderCapabilitiesSchema = z.object({
+  reusableLeases: z.boolean().optional(),
+  nativeSyncIn: z.boolean().optional(),
+  nativeSyncOut: z.boolean().optional(),
+  persistentProcessSessions: z.boolean().optional(),
+  independentControlCommands: z.boolean().optional(),
+  incrementalSessionOutput: z.boolean().optional(),
+  concurrentSyncOperations: z.boolean().optional(),
+  duplexCommandStream: z.boolean().optional(),
+  runnerWebSocketIngress: z.boolean().optional(),
+}).strict();
+
+export type SandboxProviderCapabilitiesInput = z.infer<typeof sandboxProviderCapabilitiesSchema>;
+
+// The driver declaration schema is `.strict()` so an unknown top-level key is a
+// validation error, not a silently dropped field. A misspelled capability name
+// (for example `supportsLoginPTY`) fails validation instead of dropping.
 export const pluginEnvironmentDriverDeclarationSchema = z.object({
+  supportsTasks: z.boolean().optional(),
   driverKey: z.string().min(1).regex(
     /^[a-z0-9][a-z0-9._-]*$/,
     "Environment driver key must start with a lowercase alphanumeric and contain only lowercase letters, digits, dots, hyphens, or underscores",
@@ -123,7 +185,48 @@ export const pluginEnvironmentDriverDeclarationSchema = z.object({
   kind: z.enum(["environment_driver", "sandbox_provider"]).optional(),
   displayName: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
+  defaultAcquireTimeoutMs: z.number().int().positive().max(86_400_000).optional(),
+  supportsReusableLeases: z.boolean().optional(),
+  sandboxCapabilities: sandboxProviderCapabilitiesSchema.optional(),
+  supportsInteractiveSetup: z.boolean().optional(),
+  interactiveSetupConnectionTypes: z.array(z.string().min(1).max(100)).max(10).optional(),
+  supportsTemplateCapture: z.boolean().optional(),
+  templateRefKind: z.string().min(1).max(100).optional(),
+  templateConfigBinding: pluginEnvironmentTemplateConfigBindingSchema.optional(),
+  templateIdentityPaths: z.array(z.string().min(1).max(200)).max(20).optional(),
+  supportsTemplateDelete: z.boolean().optional(),
+  // The neutral transport capability: does the provider host an interactive
+  // login on a real pseudo-terminal? Validate a literal boolean only.
+  supportsLoginPty: z.boolean().optional(),
+  // Deprecated alias for `supportsLoginPty`. It exists only so an external
+  // plugin manifest that declares the old name still loads. Validate a literal
+  // boolean only. The transform below canonicalizes it onto `supportsLoginPty`
+  // and drops it, so every downstream reader reads only the canonical field.
+  supportsSetupTokenLogin: z.boolean().optional(),
   configSchema: jsonSchemaSchema,
+}).strict().superRefine((driver, ctx) => {
+  // Reject a manifest that carries both the alias and the canonical field with
+  // different values. Matching values pass. A single field passes.
+  if (
+    driver.supportsLoginPty !== undefined
+    && driver.supportsSetupTokenLogin !== undefined
+    && driver.supportsLoginPty !== driver.supportsSetupTokenLogin
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "supportsSetupTokenLogin is a deprecated alias for supportsLoginPty; the two flags must not carry different values",
+      path: ["supportsLoginPty"],
+    });
+  }
+}).transform((driver) => {
+  // Canonicalize before any authorization or projection reads the value. The
+  // canonical field wins; the alias fills it in when only the alias is present.
+  // Drop the alias so every downstream reader reads only `supportsLoginPty`. An
+  // undefined value is omitted on JSON serialization, so a driver that declares
+  // neither field carries no login flag.
+  const { supportsSetupTokenLogin, ...rest } = driver;
+  return { ...rest, supportsLoginPty: rest.supportsLoginPty ?? supportsSetupTokenLogin };
 });
 
 export type PluginEnvironmentDriverDeclarationInput = z.infer<
@@ -143,15 +246,15 @@ export const pluginManagedAgentDeclarationSchema = z.object({
   capabilities: z.string().max(2000).nullable().optional(),
   adapterType: z.string().min(1).max(100).optional(),
   adapterPreference: z.array(z.string().min(1).max(100)).max(10).optional(),
-  adapterConfig: z.record(z.unknown()).optional(),
-  runtimeConfig: z.record(z.unknown()).optional(),
-  permissions: z.record(z.unknown()).optional(),
+  adapterConfig: z.record(z.string(), z.unknown()).optional(),
+  runtimeConfig: z.record(z.string(), z.unknown()).optional(),
+  permissions: z.record(z.string(), z.unknown()).optional(),
   status: z.enum(["idle", "paused"]).optional(),
   budgetMonthlyCents: z.number().int().min(0).optional(),
   instructions: z.object({
     entryFile: z.string().min(1).max(200).optional(),
     content: z.string().max(200_000).optional(),
-    files: z.record(z.string().max(200_000)).optional(),
+    files: z.record(z.string(), z.string().max(200_000)).optional(),
     assetPath: z.string().min(1).max(500).optional(),
   }).optional(),
 });
@@ -166,7 +269,7 @@ export const pluginManagedProjectDeclarationSchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   status: z.enum(["backlog", "planned", "in_progress", "completed", "cancelled"]).optional(),
   color: z.string().max(32).nullable().optional(),
-  settings: z.record(z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type PluginManagedProjectDeclarationInput = z.infer<typeof pluginManagedProjectDeclarationSchema>;
@@ -187,11 +290,13 @@ export const pluginManagedRoutineDeclarationSchema = z.object({
   description: z.string().max(10_000).nullable().optional(),
   assigneeRef: pluginManagedResourceRefSchema.extend({ resourceKind: z.literal("agent") }).nullable().optional(),
   projectRef: pluginManagedResourceRefSchema.extend({ resourceKind: z.literal("project") }).nullable().optional(),
-  goalId: z.string().uuid().nullable().optional(),
+  goalId: z.string().guid().nullable().optional(),
   status: z.enum(ROUTINE_STATUSES).optional(),
   priority: z.enum(ISSUE_PRIORITIES).optional(),
   concurrencyPolicy: z.enum(ROUTINE_CONCURRENCY_POLICIES).optional(),
   catchUpPolicy: z.enum(ROUTINE_CATCH_UP_POLICIES).optional(),
+  activityGatePolicy: z.enum(ROUTINE_ACTIVITY_GATE_POLICIES).optional(),
+  activityGateScope: z.enum(ROUTINE_ACTIVITY_GATE_SCOPES).optional(),
   variables: z.array(routineVariableSchema).optional(),
   triggers: z.array(z.object({
     kind: z.enum(ROUTINE_TRIGGER_KINDS),
@@ -322,10 +427,10 @@ export const pluginUiSlotDeclarationSchema = z.object({
       path: ["entityTypes"],
     });
   }
-  if (value.routePath && value.type !== "page" && value.type !== "routeSidebar") {
+  if (value.routePath && value.type !== "page" && value.type !== "routeSidebar" && value.type !== "companySettingsPage") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "routePath is only supported for page and routeSidebar slots",
+      message: "routePath is only supported for page, routeSidebar, and companySettingsPage slots",
       path: ["routePath"],
     });
   }
@@ -336,10 +441,28 @@ export const pluginUiSlotDeclarationSchema = z.object({
       path: ["routePath"],
     });
   }
+  if (value.type === "companySettingsPage" && !value.routePath) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "companySettingsPage slots require routePath",
+      path: ["routePath"],
+    });
+  }
   if (value.routePath && PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS.includes(value.routePath as (typeof PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS)[number])) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: `routePath "${value.routePath}" is reserved by the host`,
+      path: ["routePath"],
+    });
+  }
+  if (
+    value.type === "companySettingsPage"
+    && value.routePath
+    && PLUGIN_RESERVED_COMPANY_SETTINGS_ROUTE_SEGMENTS.includes(value.routePath as (typeof PLUGIN_RESERVED_COMPANY_SETTINGS_ROUTE_SEGMENTS)[number])
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `company settings routePath "${value.routePath}" is reserved by the host`,
       path: ["routePath"],
     });
   }
@@ -373,7 +496,7 @@ const launcherBoundsByEnvironment: Record<
 export const pluginLauncherActionDeclarationSchema = z.object({
   type: z.enum(PLUGIN_LAUNCHER_ACTIONS),
   target: z.string().min(1),
-  params: z.record(z.unknown()).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
 }).superRefine((value, ctx) => {
   if (value.type === "performAction" && value.target.includes("/")) {
     ctx.addIssue({
@@ -524,6 +647,7 @@ export const pluginApiRouteDeclarationSchema = z.object({
     message: "routeKey must be lowercase letters, digits, dots, colons, underscores, or hyphens",
   }),
   method: z.enum(PLUGIN_API_ROUTE_METHODS),
+  transport: z.literal("websocket").optional(),
   path: z.string().min(1).regex(/^\/[a-zA-Z0-9:_./-]*$/, {
     message: "path must start with / and contain only path-safe literal or :param segments",
   }).refine(
@@ -543,10 +667,64 @@ export const pluginApiRouteDeclarationSchema = z.object({
     z.object({ from: z.literal("body"), key: z.string().min(1) }),
     z.object({ from: z.literal("query"), key: z.string().min(1) }),
     z.object({ from: z.literal("issue"), param: z.string().min(1) }),
+    z.object({ from: z.literal("agent"), param: z.string().min(1) }),
   ]).optional(),
-});
+}).refine(route => !route.transport || (route.method === "GET" && route.auth === "board"), { message: "WebSocket routes require GET and board authentication" })
+  .refine(route => !route.transport || route.companyResolution?.from !== "body", {
+    message: "WebSocket routes cannot resolve company from a request body",
+    path: ["companyResolution"],
+  });
 
 export type PluginApiRouteDeclarationInput = z.infer<typeof pluginApiRouteDeclarationSchema>;
+
+export const pluginObjectReferenceRefreshPolicySchema = z.object({
+  defaultTtlSeconds: z.number().int().positive().max(86_400).optional(),
+  staleAfterSeconds: z.number().int().positive().max(604_800).optional(),
+}).superRefine((value, ctx) => {
+  if (
+    value.defaultTtlSeconds != null &&
+    value.staleAfterSeconds != null &&
+    value.staleAfterSeconds < value.defaultTtlSeconds
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "staleAfterSeconds must be greater than or equal to defaultTtlSeconds",
+      path: ["staleAfterSeconds"],
+    });
+  }
+});
+
+export const pluginObjectReferenceProviderDeclarationSchema = z.object({
+  providerKey: externalObjectProviderKeySchema,
+  displayName: z.string().min(1).max(100),
+  objectTypes: z.array(externalObjectTypeSchema).min(1),
+  urlPatterns: z.array(z.string().trim().min(1).max(500)).optional(),
+  refreshPolicy: pluginObjectReferenceRefreshPolicySchema.optional(),
+  webhookEndpointKeys: z.array(z.string().min(1)).optional(),
+}).superRefine((value, ctx) => {
+  const duplicateObjectTypes = value.objectTypes.filter((type, i) => value.objectTypes.indexOf(type) !== i);
+  if (duplicateObjectTypes.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Duplicate objectTypes: ${[...new Set(duplicateObjectTypes)].join(", ")}`,
+      path: ["objectTypes"],
+    });
+  }
+
+  const webhookKeys = value.webhookEndpointKeys ?? [];
+  const duplicateWebhookKeys = webhookKeys.filter((key, i) => webhookKeys.indexOf(key) !== i);
+  if (duplicateWebhookKeys.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Duplicate webhookEndpointKeys: ${[...new Set(duplicateWebhookKeys)].join(", ")}`,
+      path: ["webhookEndpointKeys"],
+    });
+  }
+});
+
+export type PluginObjectReferenceProviderDeclarationInput = z.infer<
+  typeof pluginObjectReferenceProviderDeclarationSchema
+>;
 
 // ---------------------------------------------------------------------------
 // Plugin Manifest V1 schema
@@ -611,6 +789,13 @@ export const pluginManifestV1Schema = z.object({
     "minimumPaperclipVersion must follow semver (e.g. 1.0.0)",
   ).optional(),
   capabilities: z.array(z.enum(PLUGIN_CAPABILITIES)).min(1),
+  agentLifecycle: z.literal(true).optional(),
+  workspaceProvider: z.object({
+    modes: z.array(z.enum(["shared_workspace", "isolated_workspace", "operator_branch"])).min(1).max(3),
+    strategies: z.array(z.enum(["project_primary", "git_worktree"])).min(1).max(2),
+  }).strict().optional(),
+  resourceLifecycle: z.array(z.enum(["agent", "project", "agent_runtime"])).min(1).max(3).optional(),
+  aiConnectionRouter: z.object({ name: z.string().trim().min(1).max(100), description: z.string().trim().min(1).max(500) }).strict().optional(),
   entrypoints: z.object({
     worker: z.string().min(1),
     ui: z.string().min(1).optional(),
@@ -627,12 +812,24 @@ export const pluginManifestV1Schema = z.object({
   routines: z.array(pluginManagedRoutineDeclarationSchema).optional(),
   skills: z.array(pluginManagedSkillDeclarationSchema).optional(),
   localFolders: z.array(pluginLocalFolderDeclarationSchema).optional(),
+  objectReferences: z.array(pluginObjectReferenceProviderDeclarationSchema).optional(),
   launchers: z.array(pluginLauncherDeclarationSchema).optional(),
   ui: z.object({
     slots: z.array(pluginUiSlotDeclarationSchema).min(1).optional(),
     launchers: z.array(pluginLauncherDeclarationSchema).optional(),
   }).optional(),
 }).superRefine((manifest, ctx) => {
+  if (manifest.agentLifecycle && !manifest.capabilities.includes("agents.lifecycle.manage")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Agent lifecycle participation requires agents.lifecycle.manage", path: ["capabilities"] });
+  }
+
+  if (manifest.workspaceProvider && (!manifest.capabilities.includes("workspaces.manage") || !manifest.resourceLifecycle?.includes("project"))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workspaceProvider"], message: "Workspace providers require workspaces.manage and project resource lifecycle" });
+  }
+  if (manifest.resourceLifecycle && !manifest.capabilities.includes("events.subscribe")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Resource lifecycle delivery requires events.subscribe", path: ["capabilities"] });
+  }
+
   // ── Entrypoint ↔ UI slot consistency ──────────────────────────────────
   // Plugins that declare UI slots must also declare a UI entrypoint so the
   // host knows where to load the bundle from (PLUGIN_SPEC.md §10.1).
@@ -662,6 +859,10 @@ export const pluginManifestV1Schema = z.object({
   // The host enforces capabilities at install and runtime. A plugin must
   // declare every capability it needs up-front; silently having more features
   // than capabilities would cause runtime rejections.
+
+  if (manifest.aiConnectionRouter && !manifest.capabilities.includes("ai.connections.route")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "ai.connections.route is required for aiConnectionRouter", path: ["capabilities"] });
+  }
 
   // tools require agent.tools.register (PLUGIN_SPEC.md §11)
   if (manifest.tools && manifest.tools.length > 0) {
@@ -757,6 +958,10 @@ export const pluginManifestV1Schema = z.object({
     }
   }
 
+  if (manifest.apiRoutes?.some(route => route.transport === "websocket") && !manifest.capabilities.includes("http.outbound")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "WebSocket routes require http.outbound", path: ["capabilities"] });
+  }
+
   if (manifest.apiRoutes && manifest.apiRoutes.length > 0) {
     if (!manifest.capabilities.includes("api.routes.register")) {
       ctx.addIssue({
@@ -764,6 +969,31 @@ export const pluginManifestV1Schema = z.object({
         message: "Capability 'api.routes.register' is required when apiRoutes are declared",
         path: ["capabilities"],
       });
+    }
+  }
+
+  if (manifest.objectReferences && manifest.objectReferences.length > 0) {
+    for (const capability of ["external.objects.detect", "external.objects.read"] as const) {
+      if (!manifest.capabilities.includes(capability)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Capability '${capability}' is required when objectReferences are declared`,
+          path: ["capabilities"],
+        });
+      }
+    }
+
+    const declaredWebhookKeys = new Set((manifest.webhooks ?? []).map((webhook) => webhook.endpointKey));
+    for (const [providerIndex, provider] of manifest.objectReferences.entries()) {
+      for (const endpointKey of provider.webhookEndpointKeys ?? []) {
+        if (!declaredWebhookKeys.has(endpointKey)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `objectReferences webhookEndpointKey "${endpointKey}" must match a declared webhook endpoint`,
+            path: ["objectReferences", providerIndex, "webhookEndpointKeys"],
+          });
+        }
+      }
     }
   }
 
@@ -930,6 +1160,18 @@ export const pluginManifestV1Schema = z.object({
     }
   }
 
+  if (manifest.objectReferences) {
+    const providerKeys = manifest.objectReferences.map((provider) => provider.providerKey);
+    const duplicateProviders = providerKeys.filter((key, i) => providerKeys.indexOf(key) !== i);
+    if (duplicateProviders.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Duplicate object reference provider keys: ${[...new Set(duplicateProviders)].join(", ")}`,
+        path: ["objectReferences"],
+      });
+    }
+  }
+
   // UI slot ids must be unique within the plugin (namespaced at runtime)
   if (manifest.ui) {
     if (manifest.ui.slots) {
@@ -984,26 +1226,28 @@ export const installPluginSchema = z.object({
 export type InstallPlugin = z.infer<typeof installPluginSchema>;
 
 // ---------------------------------------------------------------------------
-// Plugin config (instance configuration) schemas
+// Plugin config (company-scoped configuration) schemas
 // ---------------------------------------------------------------------------
 
 /**
- * Schema for creating or updating a plugin's instance configuration.
+ * Schema for creating or updating a plugin's company-scoped configuration.
  * configJson is validated permissively here; runtime validation against
  * the plugin's instanceConfigSchema is done at the service layer.
  */
 export const upsertPluginConfigSchema = z.object({
-  configJson: z.record(z.unknown()),
+  companyId: z.string().guid(),
+  configJson: z.record(z.string(), z.unknown()),
 });
 
 export type UpsertPluginConfig = z.infer<typeof upsertPluginConfigSchema>;
 
 /**
- * Schema for partially updating a plugin's instance configuration.
+ * Schema for partially updating a plugin's company-scoped configuration.
  * Allows a partial merge of config values.
  */
 export const patchPluginConfigSchema = z.object({
-  configJson: z.record(z.unknown()),
+  companyId: z.string().guid(),
+  configJson: z.record(z.string(), z.unknown()),
 });
 
 export type PatchPluginConfig = z.infer<typeof patchPluginConfigSchema>;

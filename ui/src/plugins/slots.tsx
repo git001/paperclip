@@ -29,6 +29,7 @@ import {
   type ReactNode,
   type ComponentType,
 } from "react";
+import * as ReactModule from "react";
 import { useQuery } from "@tanstack/react-query";
 import type {
   PluginLauncherDeclaration,
@@ -123,9 +124,28 @@ type UsePluginSlotsResult = {
  * Keys are `${pluginKey}:${exportName}` to match manifest slot declarations.
  */
 const registry = new Map<string, RegisteredPluginComponent>();
+const registryListeners = new Set<() => void>();
 
 function buildRegistryKey(pluginKey: string, exportName: string): string {
   return `${pluginKey}:${exportName}`;
+}
+
+function notifyRegistryListeners(): void {
+  for (const listener of registryListeners) {
+    listener();
+  }
+}
+
+function usePluginRegistrySubscription(): void {
+  const [, forceRerender] = useState(0);
+
+  useEffect(() => {
+    const listener = () => forceRerender((tick) => tick + 1);
+    registryListeners.add(listener);
+    return () => {
+      registryListeners.delete(listener);
+    };
+  }, []);
 }
 
 function requiresEntityType(slotType: PluginUiSlotType): boolean {
@@ -149,6 +169,7 @@ export function registerPluginReactComponent(
     kind: "react",
     component,
   });
+  notifyRegistryListeners();
 }
 
 /**
@@ -163,6 +184,7 @@ export function registerPluginWebComponent(
     kind: "web-component",
     tagName,
   });
+  notifyRegistryListeners();
 }
 
 function resolveRegisteredComponent(slot: ResolvedPluginSlot): RegisteredPluginComponent | null {
@@ -174,6 +196,24 @@ export function resolveRegisteredPluginComponent(
   exportName: string,
 ): RegisteredPluginComponent | null {
   return registry.get(buildRegistryKey(pluginKey, exportName)) ?? null;
+}
+
+function isRegisterablePluginExport(exported: unknown): boolean {
+  return typeof exported === "function" || typeof exported === "string";
+}
+
+function collectRegisterableExportNames(
+  mod: Record<string, unknown>,
+  declaredExports: Set<string>,
+): Set<string> {
+  const exportNames = new Set(declaredExports);
+  for (const [exportName, exported] of Object.entries(mod)) {
+    if (exportName === "default") continue;
+    if (isRegisterablePluginExport(exported)) {
+      exportNames.add(exportName);
+    }
+  }
+  return exportNames;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,32 +284,46 @@ function applyJsxRuntimeKey(
   return { ...(props ?? {}), key };
 }
 
+function createReactShimSource(reactModule: object): string {
+  const exportNames = Object.keys(reactModule)
+    .filter((name) => name !== "default" && /^[A-Za-z_$][\w$]*$/.test(name))
+    .sort();
+  const namedExports = exportNames
+    .map((name) => `        export const ${name} = R.${name};`)
+    .join("\n");
+
+  return `
+        const R = globalThis.__paperclipPluginBridge__?.react;
+        if (!R) {
+          throw new Error("Paperclip plugin React runtime is not initialized.");
+        }
+        export default R;
+${namedExports}
+      `;
+}
+
 function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | "react/jsx-runtime" | "sdk-ui"): string {
   if (shimBlobUrls[specifier]) return shimBlobUrls[specifier];
 
   let source: string;
   switch (specifier) {
     case "react":
-      source = `
-        const R = globalThis.__paperclipPluginBridge__?.react;
-        export default R;
-        const { useState, useEffect, useCallback, useMemo, useRef, useContext,
-          createContext, createElement, Fragment, Component, forwardRef,
-          memo, lazy, Suspense, StrictMode, cloneElement, Children,
-          isValidElement, createRef } = R;
-        export { useState, useEffect, useCallback, useMemo, useRef, useContext,
-          createContext, createElement, Fragment, Component, forwardRef,
-          memo, lazy, Suspense, StrictMode, cloneElement, Children,
-          isValidElement, createRef };
-      `;
+      source = createReactShimSource(ReactModule);
       break;
     case "react/jsx-runtime":
+      // Prefer the host's real jsx runtime: rebuilding jsx/jsxs on top of
+      // createElement(type, { children }) drops React's static-children
+      // marking, so dev React emits "unique key" warnings for every
+      // multi-child element rendered by a plugin component.
       source = `
-        const R = globalThis.__paperclipPluginBridge__?.react;
+        const BRIDGE = globalThis.__paperclipPluginBridge__;
+        const RUNTIME = BRIDGE?.reactJsxRuntime;
+        const R = BRIDGE?.react;
         const withKey = ${applyJsxRuntimeKey.toString()};
-        export const jsx = (type, props, key) => R.createElement(type, withKey(props, key));
-        export const jsxs = (type, props, key) => R.createElement(type, withKey(props, key));
-        export const Fragment = R.Fragment;
+        const fallbackJsx = (type, props, key) => R.createElement(type, withKey(props, key));
+        export const jsx = RUNTIME?.jsx ?? fallbackJsx;
+        export const jsxs = RUNTIME?.jsxs ?? fallbackJsx;
+        export const Fragment = RUNTIME?.Fragment ?? R.Fragment;
       `;
       break;
     case "react-dom":
@@ -289,7 +343,7 @@ function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | 
             throw new Error('Paperclip plugin UI runtime is not initialized for "' + name + '". Ensure the host loaded the plugin bridge before rendering this UI module.');
           };
         }
-        const { usePluginData, usePluginAction, useHostContext, useHostLocation, useHostNavigation, usePluginStream, usePluginToast } = SDK;
+        const { usePluginData, usePluginAction, useHostContext, useHostLocation, useHostNavigation, usePluginStream, usePluginToast, copyTextToClipboard } = SDK;
         const MetricCard = SDK.MetricCard ?? missing("MetricCard");
         const StatusBadge = SDK.StatusBadge ?? missing("StatusBadge");
         const DataTable = SDK.DataTable ?? missing("DataTable");
@@ -307,7 +361,7 @@ function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | 
         const AssigneePicker = SDK.AssigneePicker ?? missing("AssigneePicker");
         const ProjectPicker = SDK.ProjectPicker ?? missing("ProjectPicker");
         const ManagedRoutinesList = SDK.ManagedRoutinesList ?? missing("ManagedRoutinesList");
-        export { usePluginData, usePluginAction, useHostContext, useHostLocation, useHostNavigation, usePluginStream, usePluginToast, MetricCard, StatusBadge, DataTable, TimeseriesChart, MarkdownBlock, MarkdownEditor, KeyValueList, ActionBar, LogView, JsonTree, Spinner, ErrorBoundary, FileTree, IssuesList, AssigneePicker, ProjectPicker, ManagedRoutinesList };
+        export { usePluginData, usePluginAction, useHostContext, useHostLocation, useHostNavigation, usePluginStream, usePluginToast, copyTextToClipboard, MetricCard, StatusBadge, DataTable, TimeseriesChart, MarkdownBlock, MarkdownEditor, KeyValueList, ActionBar, LogView, JsonTree, Spinner, ErrorBoundary, FileTree, IssuesList, AssigneePicker, ProjectPicker, ManagedRoutinesList };
       `;
       break;
   }
@@ -463,7 +517,8 @@ async function loadPluginModule(contribution: PluginUiContribution): Promise<voi
         }
       }
 
-      for (const exportName of declaredExports) {
+      const exportNames = collectRegisterableExportNames(mod, declaredExports);
+      for (const exportName of exportNames) {
         const exported = mod[exportName];
         if (exported === undefined) {
           console.warn(
@@ -559,10 +614,11 @@ function usePluginModuleLoader(contributions: PluginUiContribution[] | undefined
   useEffect(() => {
     if (!contributions || contributions.length === 0) return;
 
-    // Filter to contributions that haven't been loaded yet.
+    // Also await imports started by another consumer so this observer gets a
+    // completion render even when there is no export registration (e.g. errors).
     const unloaded = contributions.filter((c) => {
       const state = pluginLoadStates.get(buildPluginModuleKey(c));
-      return state !== "loaded" && state !== "loading";
+      return state !== "loaded";
     });
 
     if (unloaded.length === 0) return;
@@ -598,9 +654,6 @@ export function usePluginSlots(filters: SlotFilters): UsePluginSlotsResult {
     enabled: queryEnabled,
   });
 
-  // Kick off dynamic imports for any new plugin contributions.
-  usePluginModuleLoader(data);
-
   const slotTypesKey = useMemo(() => [...filters.slotTypes].sort().join("|"), [filters.slotTypes]);
 
   const slots = useMemo(() => {
@@ -633,8 +686,13 @@ export function usePluginSlots(filters: SlotFilters): UsePluginSlotsResult {
     return rows;
   }, [data, filters.entityType, slotTypesKey]);
 
-  // Consider loading until both query and module imports are done.
-  const modulesLoaded = data ? aggregateLoadState(data) === "loaded" : true;
+  // A replacement surface must not disappear while an unrelated plugin loads.
+  const contributions = useMemo(() => {
+    const pluginIds = new Set(slots.map(slot => slot.pluginId));
+    return data?.filter(contribution => pluginIds.has(contribution.pluginId));
+  }, [data, slots]);
+  usePluginModuleLoader(contributions);
+  const modulesLoaded = contributions ? aggregateLoadState(contributions) === "loaded" : true;
   const isLoading = queryEnabled && (isQueryLoading || !modulesLoaded);
 
   return {
@@ -646,6 +704,7 @@ export function usePluginSlots(filters: SlotFilters): UsePluginSlotsResult {
 
 type PluginSlotErrorBoundaryProps = {
   slot: ResolvedPluginSlot;
+  fallback?: ReactNode;
   className?: string;
   children: ReactNode;
 };
@@ -673,6 +732,7 @@ class PluginSlotErrorBoundary extends Component<PluginSlotErrorBoundaryProps, Pl
 
   override render() {
     if (this.state.hasError) {
+      if (this.props.fallback !== undefined) return this.props.fallback;
       return (
         <div className={cn("rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive", this.props.className)}>
           {this.props.slot.pluginDisplayName}: failed to render
@@ -715,6 +775,10 @@ type PluginSlotMountProps = {
   context: PluginSlotContext;
   className?: string;
   missingBehavior?: "hidden" | "placeholder";
+  /** Host-specific props; slot/context cannot be overridden. */
+  componentProps?: Record<string, unknown>;
+  /** Preserve required host navigation if an optional component is unavailable. */
+  fallback?: ReactNode;
 };
 
 /**
@@ -774,7 +838,10 @@ export function PluginSlotMount({
   context,
   className,
   missingBehavior = "hidden",
+  componentProps,
+  fallback,
 }: PluginSlotMountProps) {
+  usePluginRegistrySubscription();
   const [, forceRerender] = useState(0);
   const component = resolveRegisteredComponent(slot);
 
@@ -796,6 +863,7 @@ export function PluginSlotMount({
   }, [component, slot.pluginId]);
 
   if (!component) {
+    if (fallback !== undefined) return fallback;
     if (missingBehavior === "hidden") return null;
     return (
       <div className={cn("rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground", className)}>
@@ -805,15 +873,17 @@ export function PluginSlotMount({
   }
 
   if (component.kind === "react") {
-    const node = createElement(component.component, { slot, context });
+    const node = createElement(component.component, { ...componentProps, slot, context });
     return (
-      <PluginSlotErrorBoundary slot={slot} className={className}>
+      <PluginSlotErrorBoundary key={`${slot.pluginId}:${slot.pluginVersion}:${slot.id}`} slot={slot} className={className} fallback={fallback}>
         <PluginBridgeScope pluginId={slot.pluginId} context={context}>
           {className ? <div className={className}>{node}</div> : node}
         </PluginBridgeScope>
       </PluginSlotErrorBoundary>
     );
   }
+
+  if (componentProps && fallback !== undefined) return fallback;
 
   return (
     <PluginSlotErrorBoundary slot={slot} className={className}>
@@ -835,6 +905,12 @@ type PluginSlotOutletProps = {
   itemClassName?: string;
   errorClassName?: string;
   missingBehavior?: "hidden" | "placeholder";
+  /**
+   * `hidden` suppresses the inline error and keeps rendering the last loaded
+   * slots, so ambient chrome (the sidebar) stays quiet while the server is
+   * unreachable.
+   */
+  errorBehavior?: "inline" | "hidden";
 };
 
 export function PluginSlotOutlet({
@@ -845,6 +921,7 @@ export function PluginSlotOutlet({
   itemClassName,
   errorClassName,
   missingBehavior = "hidden",
+  errorBehavior = "inline",
 }: PluginSlotOutletProps) {
   const { slots, errorMessage } = usePluginSlots({
     slotTypes,
@@ -852,7 +929,7 @@ export function PluginSlotOutlet({
     companyId: context.companyId,
   });
 
-  if (errorMessage) {
+  if (errorMessage && errorBehavior === "inline") {
     return (
       <div className={cn("rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive", errorClassName)}>
         Plugin extensions unavailable: {errorMessage}
@@ -900,4 +977,6 @@ export function _resetPluginModuleLoader(): void {
 }
 
 export const _applyJsxRuntimeKeyForTests = applyJsxRuntimeKey;
+export const _createReactShimSourceForTests = createReactShimSource;
 export const _rewriteBareSpecifiersForTests = rewriteBareSpecifiers;
+export const _collectRegisterableExportNamesForTests = collectRegisterableExportNames;

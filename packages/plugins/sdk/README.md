@@ -15,7 +15,7 @@ Reference: `doc/plugins/PLUGIN_SPEC.md`
 | Import | Purpose |
 |--------|--------|
 | `@paperclipai/plugin-sdk` | Worker entry: `definePlugin`, `runWorker`, context types, protocol helpers |
-| `@paperclipai/plugin-sdk/ui` | UI entry: `usePluginData`, `usePluginAction`, `usePluginStream`, `useHostContext`, `useHostNavigation`, slot prop types |
+| `@paperclipai/plugin-sdk/ui` | UI entry: hooks, host navigation, HTTP-safe clipboard copy, shared components, and slot prop types |
 | `@paperclipai/plugin-sdk/ui/hooks` | Hooks only |
 | `@paperclipai/plugin-sdk/ui/types` | UI types and slot prop interfaces |
 | `@paperclipai/plugin-sdk/testing` | `createTestHarness` for unit/integration tests |
@@ -100,7 +100,7 @@ runWorker(plugin, import.meta.url);
 | `onValidateConfig?(config)` | Optional. Return `{ ok, warnings?, errors? }` for settings UI / Test Connection. |
 | `onWebhook?(input)` | Optional. Handle `POST /api/plugins/:pluginId/webhooks/:endpointKey`; required if webhooks declared. |
 
-**Context (`ctx`) in setup:** `config`, `localFolders`, `events`, `jobs`, `launchers`, `http`, `secrets`, `activity`, `state`, `entities`, `projects`, `companies`, `issues`, `agents`, `goals`, `data`, `actions`, `streams`, `tools`, `metrics`, `logger`, `manifest`. Worker-side host APIs are capability-gated; declare capabilities in the manifest.
+**Context (`ctx`) in setup:** `config`, `localFolders`, `events`, `jobs`, `launchers`, `http`, `secrets`, `activity`, `state`, `entities`, `projects`, `companies`, `issues`, `agents`, `goals`, `access`, `authorization`, `data`, `actions`, `streams`, `tools`, `metrics`, `logger`, `manifest`. Worker-side host APIs are capability-gated; declare capabilities in the manifest.
 
 **Agents:** `ctx.agents.invoke(agentId, companyId, opts)` for one-shot invocation. `ctx.agents.sessions` for two-way chat: `create`, `list`, `sendMessage` (with streaming `onEvent` callback), `close`. See the [Plugin Authoring Guide](../../doc/plugins/PLUGIN_AUTHORING_GUIDE.md#agent-sessions-two-way-chat) for details.
 
@@ -134,7 +134,7 @@ Subscribe in `setup` with `ctx.events.on(name, handler)` or `ctx.events.on(name,
 
 **Filter (optional):** Pass a second argument to `on()`: `{ projectId?, companyId?, agentId? }` so the host only delivers matching events.
 
-**Company context:** Events still carry `companyId` for company-scoped data, but plugin installation and activation are instance-wide in the current runtime.
+**Company context:** Events still carry `companyId` for company-scoped data, but plugin installation and activation are instance-wide in the current runtime. Access and authorization host services require an active company-scoped invocation such as an event, API route, tool run, environment call, or UI bridge call; the requested `companyId` must match that active scope.
 
 ## Scheduled (recurring) jobs
 
@@ -214,6 +214,7 @@ Slot types describe where a component mounts. Most values also exist as launcher
 | `settingsPage` | Global | — |
 | `dashboardWidget` | Global | — |
 | `globalToolbarButton` | Global | — |
+| `appShellOverlay` (slot only) | Signed-in application shell | — |
 | `detailTab` | Entity | `project`, `issue`, `agent`, `goal`, `run` |
 | `taskDetailView` | Entity | (task/issue context) |
 | `commentAnnotation` | Entity | `comment` |
@@ -238,7 +239,9 @@ Adds a navigation-style entry to the main company sidebar navigation area, rende
 
 #### `routeSidebar`
 
-Replaces the normal company sidebar while the current route is a plugin page route with the same `routePath`. Use this for full-page plugin workspaces that need their own local navigation while keeping the company rail and account footer. Receives `PluginRouteSidebarProps` with `context.companyId` and `context.companyPrefix` set to the active company. Requires the `ui.sidebar.register` capability.
+A contextual sidebar shown while the current route is a plugin page route with the same `routePath`. Use this for full-page plugin workspaces that need their own local navigation. It does **not** replace the app sidebar: the host collapses the main `<Sidebar/>` to its 64px icon rail (still hover/peek-able) and renders your `routeSidebar` in a secondary pane beside it, producing `[ app rail ][ your sidebar ][ content ]`. Receives `PluginRouteSidebarProps` with `context.companyId` and `context.companyPrefix` set to the active company. Requires the `ui.sidebar.register` capability.
+
+Do **not** mount `RequestCollapsedSidebar` (or otherwise try to collapse the app sidebar) from a `routeSidebar` plugin — the host drives the collapse automatically while your route is active and restores the user's preference when they navigate away. The collapse is a hard invariant: a secondary sidebar always forces the app rail collapsed (hiding its expand toggle), overriding any user pin, but it never mutates the user's saved expanded/collapsed preference — that is restored as soon as they leave your route.
 
 #### `sidebarPanel`
 
@@ -321,12 +324,18 @@ Declare in `manifest.capabilities`. Grouped by scope:
 | | `activity.read` |
 | | `costs.read` |
 | | `issues.orchestration.read` |
+| | `access.members.read` |
+| | `access.invites.read` |
+| | `authorization.grants.read` |
+| | `authorization.policies.read` |
+| | `authorization.audit.read` |
 | | `database.namespace.read` |
 | | `issues.create` |
 | | `issues.update` |
 | | `issues.checkout` |
 | | `issues.wakeup` |
 | | `issue.comments.create` |
+| | `issue.comments.create_human_attributed` |
 | | `issue.documents.write` |
 | | `issue.relations.write` |
 | | `activity.log.write` |
@@ -334,6 +343,10 @@ Declare in `manifest.capabilities`. Grouped by scope:
 | | `telemetry.track` |
 | | `database.namespace.migrate` |
 | | `database.namespace.write` |
+| | `external.objects.detect` |
+| | `external.objects.read` |
+| | `external.objects.write` |
+| | `external.objects.refresh` |
 | **Instance** | `instance.settings.register` |
 | | `plugin.state.read` |
 | | `plugin.state.write` |
@@ -348,6 +361,10 @@ Declare in `manifest.capabilities`. Grouped by scope:
 | | `local.folders` |
 | **Agent** | `agent.tools.register` |
 | | `agents.invoke` |
+| | `access.members.write` |
+| | `access.invites.write` |
+| | `authorization.grants.write` |
+| | `authorization.policies.write` |
 | | `agent.sessions.create` |
 | | `agent.sessions.list` |
 | | `agent.sessions.send` |
@@ -360,6 +377,42 @@ Declare in `manifest.capabilities`. Grouped by scope:
 | | `ui.action.register` |
 
 Full list in code: import `PLUGIN_CAPABILITIES` from `@paperclipai/plugin-sdk`.
+
+### External Object Reference Providers
+
+Trusted connector plugins can declare generic external object providers in the
+manifest. The host owns URL scanning, sanitized canonical URLs, core storage,
+normalized status rendering, and issue/comment/document write durability. The
+plugin only identifies provider-owned objects and resolves board-safe status
+metadata.
+
+```ts
+objectReferences: [
+  {
+    providerKey: "mocktracker",
+    displayName: "Mock Tracker",
+    objectTypes: ["ticket"],
+    urlPatterns: ["https://mock.example/tickets/:id"],
+    refreshPolicy: { defaultTtlSeconds: 300, staleAfterSeconds: 1800 },
+  },
+],
+capabilities: ["external.objects.detect", "external.objects.read"],
+```
+
+Implement `onDetectExternalObjects()` to map sanitized URL candidates to
+`providerKey`, `objectType`, provider-stable `externalId`, and optional display
+metadata such as `displayKey`/`iconKey`. Implement `onResolveExternalObject()`
+to return a normalized snapshot with `statusCategory`, `statusTone`,
+`statusLabel`, optional `statusIconKey`, board-safe `data`, and freshness
+metadata. Slow or failing plugins are isolated: Paperclip logs the failure and
+continues saving the source issue, comment, or document.
+
+MVP security posture: provider plugins are trusted installs. Manifest
+capabilities gate host APIs and provider invocation paths, but they are not a
+sandbox boundary for untrusted marketplace code. Plugin UI is same-origin
+JavaScript and must not be mounted inline in markdown; inline external-object
+rendering uses host-owned metadata only. Treat untrusted providers as future work
+that requires worker sandboxing plus isolated plugin UI.
 
 ### Restricted Database Namespace
 
@@ -518,6 +571,26 @@ const summary = await ctx.issues.summaries.getOrchestration({
 });
 ```
 
+By default, `ctx.issues.createComment` attributes the comment to the calling
+plugin's own agent (`authorAgentId`). A plugin that relays a message a human
+actually sent — a chat gateway bridging Slack/Telegram replies back onto an
+issue, for example — can instead attribute the comment to that person by
+passing `actorUserId`:
+
+```ts
+await ctx.issues.createComment(issueId, replyText, companyId, {
+  actorUserId: verifiedSlackUser.paperclipUserId,
+});
+```
+
+This requires the `issue.comments.create_human_attributed` capability in
+addition to `issue.comments.create`. The host independently verifies that
+`actorUserId` is an active human member of the issue's company before
+applying the comment — a plugin cannot forge attribution to an arbitrary or
+inactive user id. When the issue has a non-terminal status and an assigned
+agent, a human-attributed comment also wakes that assignee, the same way a
+board user's comment does in the web app.
+
 Required capabilities:
 
 | API | Capability |
@@ -526,6 +599,8 @@ Required capabilities:
 | `ctx.issues.relations.setBlockedBy` / `addBlockers` / `removeBlockers` | `issue.relations.write` |
 | `ctx.issues.getSubtree` | `issue.subtree.read` |
 | `ctx.issues.assertCheckoutOwner` | `issues.checkout` |
+| `ctx.issues.createComment` | `issue.comments.create` |
+| `ctx.issues.createComment` with `actorUserId` | `issue.comments.create` + `issue.comments.create_human_attributed` |
 | `ctx.issues.requestWakeup` / `requestWakeups` | `issues.wakeup` |
 | `ctx.issues.summaries.getOrchestration` | `issues.orchestration.read` |
 
@@ -689,6 +764,16 @@ The SSE connection targets `GET /api/plugins/:pluginId/bridge/stream/:channel?co
 The host provides selected shared UI components through `@paperclipai/plugin-sdk/ui`.
 Plugins can also use normal React components, their own CSS, or small design
 primitives inside the plugin package.
+
+Use `copyTextToClipboard` for every plugin copy action. The host selects the
+modern Clipboard API in secure contexts and a compatible fallback in plain-HTTP
+deployments.
+
+```tsx
+import { copyTextToClipboard } from "@paperclipai/plugin-sdk/ui";
+
+await copyTextToClipboard("text to copy");
+```
 
 Use the shared components when the plugin needs to look and behave like a native
 Paperclip surface:
@@ -1213,3 +1298,104 @@ const server = await startPluginDevServer({ rootDir: process.cwd() });
 Dev server endpoints:
 - `GET /__paperclip__/health` returns `{ ok, rootDir, uiDir }`
 - `GET /__paperclip__/events` streams `reload` SSE events on UI build changes
+
+### Persistent application shell contributions
+
+An `appShellOverlay` slot uses `ui.action.register` and the standard
+`PluginWidgetProps` context. It survives navigation and unmounts on account or
+company changes, sign-out and onboarding. Plugins own panel accessibility and
+request cleanup. See [the distribution and lifecycle contract](../../../doc/plugins/DISTRIBUTION-PLUGINS.md).
+
+## Project storage and task workspaces
+
+A storage provider declares `workspaceProvider: { modes: ["isolated_workspace"],
+strategies: ["git_worktree"] }`, `workspaces.manage`, and
+`resourceLifecycle: ["project"]` (with `events.subscribe`). The same plugin must
+implement `onResourceLifecycle` and `onWorkspaceOperation`. Project lifecycle
+creates and retains the storage; workspace operations manage task checkouts in
+that storage. Execution remains a separate environment driver contract.
+
+Set `project.executionWorkspacePolicy.storageProviderPluginId` to the installed
+plugin's UUID. Core then reserves an execution-workspace row and binds the task
+before it calls `onWorkspaceOperation`. Projects without this setting keep their
+current local behavior. Existing managed workspaces retain their original owner.
+
+The hook receives a company, project, source revision, execution-workspace ID,
+lifecycle generation, deadline, and stable operation ID. Run and agent IDs are
+optional context. A storage hook must work without an environment lease, a live
+agent, or a filesystem mount on Core. It must reconcile ambiguous retries before
+repeating side effects. Use the workspace ID and generation to fence provider
+operations; the operation ID identifies a retry of the same request.
+Fresh inspections get a new operation ID so provider result caches cannot reuse
+an earlier checkout status. Prepare and removal retries retain their IDs.
+
+- `prepare` creates or restores the checkout. It returns an opaque, durable
+  `WorkspaceProviderBinding`, a branch, and the starting commit. `branchMode:
+  "existing"` must use an existing logical branch and must never reset its history.
+  A provider may materialize a local ref from a confirmed existing remote branch. Retried preparation must keep
+  local work. Providers may reject modes or strategies they do not support.
+- `inspect` reports tracked, untracked, and ignored/local-only changes, the
+  current commit, merge state, and whether remote storage can recover it. Use
+  `null` when a remote recovery or merge check is unknown.
+- `remove` checks the expected commit again and confirms removal. Busy, failed,
+  unsafe, and uncertain removal must throw. Core requires a clean checkout and
+  affirmative remote recovery or merge evidence before requesting removal.
+
+References contain the installed plugin ID, project/source/workspace IDs, source
+revision, and opaque provider coordinates. They must not contain secrets. Core
+stores no local `cwd` for managed rows. `/workspaces/<id>` is a logical path in
+Core's existing run metadata; Core must not use it for filesystem access.
+
+For the initial execution integration, select a task-capable environment driver
+from the same plugin. Core validates declared modes and strategies before it
+reserves a workspace. Core pins the binding on the environment lease and supplies
+it as `PluginEnvironmentTaskParams.workspace`. The execution hook resolves the
+provider reference to guest mounts and the actual working directory. Core rejects
+an execution driver from a different plugin. Native execution also requires the
+plugin Runner task bridge; Core refuses to fall back to a host Runner when that
+bridge is unavailable. This does not require merging the
+storage and execution interfaces.
+
+Core's existing archive, reopen, and terminal cleanup fences also cover provider
+workspaces. The plugin must prevent project storage retirement while its task
+workspaces still contain local data. Repository source and storage owner changes
+are blocked while live managed workspaces depend on them. An authorized storage
+owner or source edit retires closed workspaces whose provider removal is confirmed;
+retired records cannot reopen. Inspection reconciles a pending restoration with
+its recorded request, advances its generation, and keeps the Core row closed.
+Cleanup must then inspect that generation afresh; it cannot reuse an earlier
+removal receipt. Direct removal refuses unresolved restoration intent.
+Core commits storage intent and recovery results with cleanup notifications so
+incremental terminal-workspace sweeps revisit changed records.
+Pending deletion is replayed before inspection, including after a lost removal
+result. File browsing and
+other Core-host filesystem operations are unavailable for managed storage.
+
+Use `createWorkspaceProviderHarness` from `@paperclipai/plugin-sdk/testing` to
+validate hook inputs and outputs without allocating an execution environment.
+
+
+### Private project instance credentials
+
+Project lifecycle plugins can opt into `projects.instance-secrets` alongside
+`events.subscribe` and `resourceLifecycle: ["project"]`. Automatic project
+callbacks receive `event.instanceSecrets`; return an `instanceSecrets` patch
+with an acknowledged result. Core stores the patch in the existing native
+instance-secret system and acknowledges the event in one transaction. A null
+value removes a key. Retry and deferred results do not store patches.
+
+Each company/project/installed-plugin owns its credentials. Up to 16 lowercase
+snake_case keys may change per result; nonempty string values are limited to
+128 KiB each. Core rejects replies if configuration, project sources, lifecycle
+state, or secret versions changed during the callback. A duplicate response to
+an acknowledged event cannot overwrite credentials. Deleted projects allow
+removal only; their secrets are also deleted by the native owner foreign key.
+
+Trusted worker code can use
+`ctx.projects.getInstanceSecrets(projectId, companyId)` during a company-scoped
+invocation to read its credentials without an external service call. Archived
+or missing projects cannot be read this way. Values never appear in ordinary
+lifecycle inbox listings or the company secret catalog. Do not expose values
+through plugin entities, state, data handlers, UI, or logs. Agent instance
+secrets retain their existing lifecycle contract. Back up the tenant's existing
+local secrets master key together with its database.

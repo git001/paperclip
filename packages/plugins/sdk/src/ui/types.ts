@@ -16,6 +16,7 @@
 
 import type {
   AnchorHTMLAttributes,
+  ReactNode,
   MouseEvent as ReactMouseEvent,
 } from "react";
 import type {
@@ -54,6 +55,7 @@ export type {
  * Error codes:
  * - `WORKER_UNAVAILABLE` — plugin worker is not running
  * - `CAPABILITY_DENIED` — plugin lacks the required capability
+ * - `INVOCATION_SCOPE_DENIED` — plugin call escaped the invocation company scope
  * - `WORKER_ERROR` — worker returned an error from its handler
  * - `TIMEOUT` — worker did not respond within the configured timeout
  * - `UNKNOWN` — unexpected bridge-level failure
@@ -230,6 +232,18 @@ export interface PluginPageProps {
 }
 
 /**
+ * Props passed to a plugin company settings page component.
+ *
+ * A company settings page is mounted at
+ * `/:companyPrefix/company/settings/:routePath` and always receives the active
+ * company id and prefix when available.
+ */
+export interface PluginCompanySettingsPageProps {
+  /** The current host context, including company id and prefix. */
+  context: PluginHostContext;
+}
+
+/**
  * Props passed to a plugin dashboard widget component.
  *
  * A dashboard widget is rendered as a card or section on the main dashboard.
@@ -254,6 +268,27 @@ export interface PluginDetailTabProps {
   context: PluginHostContext & {
     entityId: string;
     entityType: string;
+  };
+}
+
+/** A single installed contribution replaces the organization menu. The host
+ * reserves the trigger while loading and uses its built-in menu when absent,
+ * ambiguous, or on render failure.
+ * These values/callbacks are presentation context, never authorization. */
+export interface PluginOrganizationSwitcherProps {
+  organizationSwitcher: {
+    /** Host-local company branding, not an external account/organization label.
+     * Plugins resolve external organization identity at their owning service. */
+    currentCompany: { name: string; logoUrl: string | null } | null;
+    collapsed: boolean;
+    open: boolean;
+    onOpenChange(open: boolean): void;
+    /** Close mobile navigation before leaving the current organization. */
+    onNavigate(): void;
+    /** Host-owned logout preserves its session/cache invalidation behavior. */
+    onSignOut(): void;
+    signingOut: boolean;
+    renderIcon(name: string, logoUrl: string | null, inMenu: boolean): ReactNode;
   };
 }
 
